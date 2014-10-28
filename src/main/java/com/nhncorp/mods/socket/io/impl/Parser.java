@@ -6,6 +6,7 @@ import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.json.impl.Json;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,7 +88,7 @@ public class Parser {
 				data = packet.getString("ackId");
 				args = packet.getArray("args");
 				if(args != null && args.size() > 0) {
-					data += "+" + Json.encode(args.toString());
+					data += "+" + args.encode();
 				}
 				break;
 
@@ -186,7 +187,7 @@ public class Parser {
 				packet.putString("data", data);
 				break;
 			case "event":
-				JsonObject parsedData = new JsonObject(data.toString());
+				JsonObject parsedData = new JsonObject(data);
 				packet.putString("name", parsedData.getString("name"));
 				JsonArray args = parsedData.getArray("args");
 				if(args != null) {
@@ -203,11 +204,20 @@ public class Parser {
 				String ackRegexp = "^([0-9]+)(\\+)?(.*)";
 				String[] piecedData = RegexUtils.match(data, ackRegexp);
 				if(piecedData[0] != null) {
-					packet.putString("ackId", pieces[1]);
+					packet.putString("ackId", piecedData[1]);
 					packet.putArray("args", new JsonArray());
 					if(piecedData[3] != null) {
-						JsonArray ackArgs = new JsonArray();
-						ackArgs.add(new JsonObject(piecedData[3]));
+						JsonArray ackArgs;
+                        String sArgs = piecedData[3];
+                        try {
+                            JsonObject jsArgs = new JsonObject(sArgs);
+                            ackArgs = new JsonArray();
+                            ackArgs.addObject(jsArgs);
+                        } catch (Exception e) {
+                            // System.err.println("data as JsonObject failed. Trying JsonArray");
+                            ackArgs = new JsonArray(sArgs);
+                        }
+
 						packet.putArray("args", ackArgs);
 					}
 				}
@@ -254,4 +264,27 @@ public class Parser {
 		}
 		return ret;
 	}
+
+
+    public static void main(String[] args) {
+        String eventPacket = "5:2+::{\"name\":\"request\",\"args\":[{\"resource\":{\"contact\":\"ed90e9a4-8ed3-42fe-8114-abd8b196b7f4\",\"delayTolerance\":\"10\",\"aggregateURI\":\"\"},\"method\":\"create\",\"typename\":\"subscription\",\"path\":\"/m2m/applications/myApp/subscriptions\"}]}";
+        String ackPacket = "6:::2+[{\"result\":{\"statusCode\":201,\"resourceURI\":\"/m2m/applications/myApp/subscriptions/subscription-Ygo7CQIb6HS5v9EC\",\"primitiveType\":\"create\",\"resource\":{\"subscription\":{\"id\":\"subscription-Ygo7CQIb6HS5v9EC\",\"lastModifiedTime\":\"2014-10-09T13:45:31.953000+00:00\",\"delayTolerance\":\"10\",\"aggregateURI\":\"\",\"noRepresentation\":null,\"expirationTime\":\"2014-10-09T14:45:31.953000+00:00\",\"timeoutReason\":null,\"filterCriteria\":null,\"path\":\"/m2m/applications/myApp/subscriptions/subscription-Ygo7CQIb6HS5v9EC\",\"subscriptionType\":null,\"subscriberId\":null,\"creationTime\":\"2014-10-09T13:45:31.953000+00:00\",\"contact\":\"sio:///ed90e9a4-8ed3-42fe-8114-abd8b196b7f4\",\"minimalTimeBetweenNotifications\":null}},\"fields\":[\"expirationTime\"]},\"status\":\"ok\"}]";
+        String ackPacket2 = "6:::1+[\"200 OK\"]";
+
+        Parser p = new Parser();
+        System.out.println("Testing parser: " + eventPacket);
+        System.out.println("result:\r\n" + p.decodePacket(eventPacket).encodePrettily());
+        System.out.println();
+
+        System.out.println("Testing parser: " + ackPacket);
+        System.out.println("result:\r\n" + p.decodePacket(ackPacket).encodePrettily());
+        System.out.println();
+
+        System.out.println("Testing parser: " + ackPacket2);
+        System.out.println("result:\r\n" + p.decodePacket(ackPacket2).encodePrettily());
+        System.out.println();
+
+
+    }
+
 }

@@ -1,6 +1,7 @@
 package com.nhncorp.mods.socket.io.impl;
 
 import com.nhncorp.mods.socket.io.SocketIOSocket;
+import com.nhncorp.mods.socket.io.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.vertx.java.core.Handler;
@@ -29,7 +30,7 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 	private Parser parser;
 	private VertxInternal vertx;
 	private Handler<SocketIOSocket> socketHandler;
-	private Map<String, Handler<JsonArray>> acks;
+	private Map<String, Handler<JsonObject>> acks;
 	private boolean disconnected;
 	private Store store;
 	private Map<String, Handler> handlerMap;
@@ -178,6 +179,19 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		this.setupFlags();
 	}
 
+    private int packetID = 0;
+
+    public void packet(JsonObject packet, Handler<JsonObject> replyHandler) {
+        String myPacketID = String.valueOf(++packetID);
+
+        packet.putString("id", myPacketID);
+        acks.put(String.valueOf(myPacketID), replyHandler);
+
+        packet.putString("endpoint", this.flags.getString("endpoint"));
+        String encodedPacket = parser.encodePacket(packet);
+        this.dispatch(encodedPacket, this.flags.getBoolean("volatile", false));
+    }
+
 	/**
 	 * Dispatches a packet
 	 *
@@ -228,6 +242,24 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		this.packet(packet);
 	}
 
+    @Override
+    public void emit(String event, JsonObject message, Handler<JsonObject> replyHandler) {
+        JsonObject packet = new JsonObject();
+        packet.putString("type", "event");
+        packet.putString("name", event);
+
+        // add ack indicator
+        packet.putString("ack", "data");
+
+        if(message != null) {
+            JsonArray args = new JsonArray();
+            args.addObject(message);
+            packet.putArray("args", args);
+        }
+
+        packet(packet, replyHandler);
+    }
+
 	/**
 	 * emit disconnection
 	 *
@@ -237,7 +269,7 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		JsonObject packet = new JsonObject();
 		packet.putString("reason", reason);
 		packet.putString("name", "disconnect");
-		emit(packet);
+        emitOnEB(packet);
 	}
 
 	/**
@@ -300,6 +332,30 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 	}
 
 	/**
+	 * register handler to an event. Providing an extended handler gives the ability to reply to events.
+	 *
+	 * @param event
+	 * @param handler
+     * @param extendedHandler
+	 */
+	public void on(String event, final Handler<JsonObject> handler, final Handler<Message<JsonObject>> extendedHandler) {
+        String address = id + ":" + namespace.getName() + ":" + event;
+
+        if (extendedHandler != null) {
+            vertx.eventBus().registerHandler(address, extendedHandler);
+            handlerMap.put(address, extendedHandler);
+        } else {
+            Handler<Message<JsonObject>> localHandler = new Handler<Message<JsonObject>>() {
+                public void handle(Message<JsonObject> event) {
+                    handler.handle(event.body());
+                }
+            };
+            vertx.eventBus().registerHandler(address, localHandler);
+            handlerMap.put(address, localHandler);
+        }
+	}
+
+	/**
 	 * execute socket handler.
 	 */
 	public synchronized void onConnection() {
@@ -308,10 +364,14 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		}
 	}
 
+    public void emitOnEB(JsonObject params) {
+        emitOnEB(params, null);
+    }
+
 	// $emit
-	public void emit(JsonObject params) {
+	public void emitOnEB(JsonObject params, Handler<Message<JsonObject>> replyHandler) {
 		String name = params.getString("name", "message");
-		JsonObject packet = flatten(params.getArray("args"));
+		JsonObject packet = Util.flatten(params.getArray("args"));
 		if(name.equals("disconnect")) {
 			packet.putString("reason", params.getString("reason"));
 		}
@@ -328,7 +388,9 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		String address = id + ":" + namespace.getName() + ":" + name;
 		if(name.equals("disconnect")) {
 			disconnect(address, packet);
-		} else {
+		} else if (params.containsField("ack") && replyHandler != null) {
+            send(address, packet, replyHandler);
+        } else {
 			send(address, packet);
 		}
 	}
@@ -336,6 +398,10 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 	private void send(String address, JsonObject packet) {
 		vertx.eventBus().send(address, packet);
 	}
+
+    private void send(String address, JsonObject packet, Handler<Message<JsonObject>> replyHandler) {
+        vertx.eventBus().send(address, packet, replyHandler);
+    }
 
 	private void disconnect(String address, JsonObject packet) {
 		if(this.disconnectHandler != null) {
@@ -349,27 +415,6 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		handlerMap.clear();
 	}
 
-	private JsonObject flatten(JsonArray jsonArray) {
-		if(jsonArray == null) {
-			return new JsonObject();
-		}
-
-		JsonObject result = new JsonObject();
-
-		Iterator<Object> iterator = jsonArray.iterator();
-		while (iterator.hasNext()) {
-			Object o = iterator.next();
-			if(o instanceof JsonObject) {
-				result.mergeIn((JsonObject)o);
-			} else if(o instanceof String) {
-				if(result.getField("data") == null) {
-					result.putString("data", (String)o);
-				}
-			}
-		}
-
-		return result;
-	}
 
 	/**
 	 * Triggered on disconnect
@@ -384,7 +429,7 @@ public class DefaultSocketIOSocket implements SocketIOSocket {
 		}
 	}
 
-	public Map<String, Handler<JsonArray>> getAcks() {
+	public Map<String, Handler<JsonObject>> getAcks() {
 		return acks;
 	}
 

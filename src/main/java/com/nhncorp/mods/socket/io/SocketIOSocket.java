@@ -2,7 +2,7 @@ package com.nhncorp.mods.socket.io;
 
 import com.nhncorp.mods.socket.io.impl.HandshakeData;
 import org.vertx.java.core.Handler;
-import org.vertx.java.core.json.JsonArray;
+import org.vertx.java.core.eventbus.Message;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.shareddata.Shareable;
 
@@ -15,10 +15,11 @@ public interface SocketIOSocket extends Shareable {
 	String getId();
 
 	void emit(String event, JsonObject message);
+    void emit(String event, JsonObject message, Handler<JsonObject> replyHandler);
 
-	void on(String event, Handler<JsonObject> handler);
+	void on(String event, Handler<JsonObject> handler, Handler<Message<JsonObject>> extendedHandler);
 
-	Map<String,Handler<JsonArray>> getAcks();
+	Map<String,Handler<JsonObject>> getAcks();
 
 	void packet(JsonObject packet);
 
@@ -28,7 +29,8 @@ public interface SocketIOSocket extends Shareable {
 
 	void onDisconnect(String reason);
 
-	void emit(JsonObject packet);
+    void emitOnEB(JsonObject packet);
+    void emitOnEB(JsonObject params, Handler<Message<JsonObject>> replyHandler);
 
 	void emitDisconnect(String reason);
 

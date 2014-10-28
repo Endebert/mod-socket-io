@@ -1,10 +1,13 @@
 package com.nhncorp.mods.socket.io.impl;
 
 import com.nhncorp.mods.socket.io.SocketIOSocket;
+import com.nhncorp.mods.socket.io.Util;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.eventbus.EventBus;
+import org.vertx.java.core.eventbus.Message;
 import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.shareddata.Shareable;
@@ -250,7 +253,7 @@ public class Namespace implements Shareable {
 	 * @param sessionId
 	 * @param packet
 	 */
-	public void handlePacket(final String sessionId, JsonObject packet) {
+	public void handlePacket(final String sessionId, final JsonObject packet) {
 		final SocketIOSocket socket = socket(sessionId, true);
 		boolean isDataAck = false;
 		String ack = packet.getString("ack");
@@ -259,6 +262,20 @@ public class Namespace implements Shareable {
 		}
 
 		String type = packet.getString("type");
+
+        Handler<Message<JsonObject>> replyHandler = new Handler<Message<JsonObject>>() {
+            @Override
+            public void handle(Message<JsonObject> reply) {
+                JsonObject obj = new JsonObject();
+                obj.putString("type", "ack");
+                obj.putString("ackId", packet.getString("id"));
+                JsonArray args = new JsonArray();
+                args.addObject(reply.body());
+                obj.putArray("args", args);
+                socket.packet(obj);
+            }
+        };
+
 		switch (type) {
 			case "connect":
 				String endpoint = packet.getString("endpoint", "");
@@ -288,15 +305,29 @@ public class Namespace implements Shareable {
 				break;
 
 			case "ack":
-				Map<String, Handler<JsonArray>> acks = socket.getAcks();
-				if (acks.size() > 0) {
-					Handler ackHandler = acks.get(packet.getString("ackId"));
-					if (ackHandler != null) {
-						ackHandler.handle(packet.getArray("args"));
-					} else {
-						log.info("unknown ack packet");
-					}
-				}
+                Handler ackHandler = socket.getAcks().get(packet.getString("ackId"));
+				if (ackHandler != null) {
+
+                    String name = packet.getString("name", "message");
+                    JsonObject ackPack = Util.flatten(packet.getArray("args"));
+                    if(name.equals("disconnect")) {
+                        ackPack.putString("reason", packet.getString("reason"));
+                    }
+
+                    Object message = packet.getField("message");
+                    if(message != null) {
+                        if(message instanceof String) {
+                            ackPack.putString("message", packet.getString("message"));
+                        } else if(message instanceof JsonObject) {
+                            ackPack.putObject("message", packet.getObject("message"));
+                        }
+                    }
+
+
+					ackHandler.handle(ackPack);
+				} else {
+                    log.info("unknown ack packet " + packet.getString("ackId") + " not matching any pending: " + socket.getAcks().keySet());
+                }
 				break;
 
 			case "event":
@@ -311,8 +342,11 @@ public class Namespace implements Shareable {
 					params.putString("name", packet.getString("name"));
 					if (isDataAck) {
 						params.putString("ack", packet.getString("ack"));
-					}
-					socket.emit(params);
+                        socket.emitOnEB(params, replyHandler);
+					} else {
+                        socket.emitOnEB(params);
+                    }
+
 				}
 				break;
 			case "disconnect":
@@ -334,8 +368,10 @@ public class Namespace implements Shareable {
 
 				if (isDataAck) {
 					params.putString("ack", ack);
-				}
-				socket.emit(params);
+                    socket.emitOnEB(params,replyHandler);
+                } else {
+                    socket.emitOnEB(params);
+                }
 		}
 	}
 
